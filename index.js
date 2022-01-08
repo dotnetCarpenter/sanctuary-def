@@ -1493,6 +1493,8 @@
     }
   }
 
+  var globalDebug = [];
+
   //# test :: Array Type -> Type -> a -> Boolean
   //.
   //. Takes an environment, a type, and any value. Returns `true` if the value
@@ -1504,24 +1506,41 @@
     return function(t) {
       return function(x) {
         var typeInfo = {name: 'name', constraints: {}, types: [t]};
+
+        var type   = show (t);
+        var result = t.validate ([]) (x);
+
+        globalDebug.push ([
+          show (x),
+          String (type),
+          show (result),
+          String (JSON.stringify (t))
+        ]);
+
+        // console.debug (JSON.parse (JSON.stringify (globalDebug)));
+
         return (satisfactoryTypes (env, typeInfo, {}, t, 0, [], [x])).isRight;
       };
     };
   }
 
-  //# validate :: Type -> a -> Either (Array ValidationError) a
+  //# validate :: Type -> a -> Array (Either Incorrect Correct)
   //.
-  //. Takes a type, and any value. Returns `Right a` if
-  //. the value is a member of the type;
-  //. `Left (Array ValidationError)` for each property
-  //. that is invalid. The first index in a `Left` array
-  //. is always named `$$`, which refers to the entire value.
+  //. Takes a type, and any value. Returns
+  //. Array (Either Incorrect Correct) for each property.
+  //. The first index is always named `$$`,
+  //. which refers to the entire value.
   function validate(t) {
     return function(x) {
-      //  $$Result :: {value, propPath} e => Either e a
-      var $$Result = t.validate ([]) (x);
+      var isEmpty = x => x == null ? true : Object.keys(x).length === 0;
 
-      //  props :: Array (Either ValidationError TestObject)
+      var $$ResultTestObject = Right ({
+        name: '$$',
+        type: t,
+        value: x
+      });
+
+      //  props :: Array (Either Incorrect TestObject)
       var props = t.keys.map (function(p) {
         return x == null
           ? Left ({
@@ -1537,64 +1556,70 @@
             });
       });
 
-      //  validateTestObject :: TestObject -> Either ValidationError TestObject
-      var validateTestObject = Z.compose (function(p) {
+      //  validateTestObject :: TestObject -> Either Incorrect Correct
+      var validateTestObject = function(p) {
+        let returnValue = {
+          name: p.name,
+          result: p.type.validate ([]) (p.value),
+          type: p.type
+        };
+
+        let entire = JSON.stringify (returnValue).replaceAll ('\"', "'");
+        let result = show (returnValue.result);
+        x;
+
+        return returnValue;
+      };
+
+      var getType = function(t) {
+        if (isEmpty (t.types)) return t.name || t.type;
+
+        return getType (t.types.$1);
+      }
+
+      var toResult = function(p) {
         if (p.result.isRight) {
-          return Right (p);
-        } else if (p.name in x) {
+          return Right ({
+            type: (p.type.types == null || p.type.types.$1 == null)
+              ? p.type.name || p.type.type
+              : getType (p.type),
+            name: p.name
+          });
+        } else if (p.name === '$$' || p.name in x) {
           return Left ({
             error: 'WrongValue',
+            type: (p.type.types == null || p.type.types.$1 == null)
+              ? p.type.name || p.type.type
+              : getType (p.type),
             // TODO: figure out what propPath really is
-            type: p.result.value.propPath.length > 0
-              ? p.type.types[p.result.value.propPath[0]].name
-              : p.type.name,
-            name: p.name,
-            value: p.value
+            // type: p.result.value.propPath.length > 0
+            //   ? p.type.types[p.result.value.propPath[0]].name
+            //   : p.type.name,
+            name: p.name
           });
         } else {
           return Left ({
             error: 'MissingValue',
             type: p.type.name,
-            name: p.name,
-            value: p.value
+            name: p.name
           });
         }
-      }, function(p) {
-        return {
-          name: p.name,
-          result: p.type.validate ([]) (p.value),
-          type: p.type,
-          value: p.value
-        };
-      });
-
-      if ($$Result.isLeft) {
-        //  tmp0 :: Array (ValidationError)
-        var tmp0 = lefts (Z.map (function(prop) {
-          return Z.chain (validateTestObject, prop);
-        }, props));
-
-        //  tmp1 :: Array (ValidationError)
-        var tmp1 = Z.prepend ({
-          error: 'WrongValue',
-          type: t.name || t.type,
-          name: '$$',
-          value: x
-        }, tmp0);
-
-        // return :: Left (Array ValidationError)
-        return Left (tmp1);
-      } else {
-        // return :: Right a
-        return $$Result;
       }
 
-      // return Z.concat (
-      //   returnValue,
-      //   Z.filter (
-      //     either => either.isLeft,
-      //     Z.map (prop => Z.map (validateRights, prop), props))
-      // );
+      var doValidation = Z.compose (toResult, validateTestObject);
+
+      var tmp0 = Z.prepend ($$ResultTestObject, props);
+
+      //  tmp1 :: Array (Either Incorrect Correct)
+      var tmp1 = Z.map (function(prop) {
+        return Z.chain (doValidation, prop);
+      }, tmp0);
+
+      //  tmp2 :: Array (Either Incorrect Correct)
+      // var tmp2 = Z.prepend ($$Result, tmp1);
+
+      // return :: Array (Either Incorrect Correct)
+      return tmp1;
     };
   }
 
@@ -2994,6 +3019,7 @@
     Unknown: Unknown,
     Void: Void,
     env: env,
+    globalDebug: globalDebug,
     create:
       def ('create')
           ({})
@@ -3008,7 +3034,8 @@
     validate:
       def ('validate')
           ({})
-          ([Type, Any, Either_ (Array_ (Object_)) (Any)])
+          // ([Type, Any, Either_ (Array_ (Object_)) (Any)])
+          ([Type, Any, Array_ (Either_ (Object_) (Object_))])
           (validate),
     NullaryType:
       def ('NullaryType')
